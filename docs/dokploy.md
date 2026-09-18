@@ -29,15 +29,30 @@ Dokploy apps.
 
 ## 2. One-time Garage bootstrap (attachments storage)
 
-After the first successful deploy, open the `garage` container terminal in
-Dokploy (or `docker exec -it <garage container> bash`) and run:
+The `garage` image is distroless (no `sh`), so Dokploy's container terminal
+cannot open it and `setup.sh` cannot run inside it. Run the bootstrap from the
+**host** instead: Dokploy → **Settings → Server → Terminal** (or SSH in), then:
 
 ```bash
-bash /garage-setup/setup.sh
+curl -fsSL https://raw.githubusercontent.com/themeanie3/bigcapital/develop/docker/garage/bootstrap-from-host.sh | bash
 ```
 
-It prints an access key id and secret. Put them into the Environment tab as
-`S3_ACCESS_KEY_ID` / `S3_SECRET_ACCESS_KEY` and redeploy.
+(or `bash docker/garage/bootstrap-from-host.sh` from a checkout). It finds the
+running garage container, applies the single-node layout, creates the
+`bigcapital` key and bucket, and prints `S3_ACCESS_KEY_ID` /
+`S3_SECRET_ACCESS_KEY`. Put them in the Environment tab and redeploy.
+
+Manual equivalent, one command at a time (`C` = garage container name from
+`docker ps`):
+
+```bash
+docker exec $C /garage status
+docker exec $C /garage layout assign $(docker exec $C /garage node id | awk 'NR==1{print $1}') -z dc1 -c 10G
+docker exec $C /garage layout apply --version 1
+docker exec $C /garage key create --name bigcapital      # prints Key ID + Secret key
+docker exec $C /garage bucket create bigcapital
+docker exec $C /garage bucket allow --read --write --owner --key bigcapital --bucket bigcapital
+```
 
 ## 3. Migrations
 
