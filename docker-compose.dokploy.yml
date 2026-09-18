@@ -1,0 +1,265 @@
+# Dokploy deployment of this Bigcapital fork.
+#
+# Differences from docker-compose.prod.yml:
+#   - server / webapp are BUILT FROM THIS REPOSITORY instead of pulling
+#     bigcapitalhq/* images, so the fork's changes are what gets deployed.
+#   - No host port bindings. Dokploy's Traefik terminates TLS and routes the
+#     configured domain to the `proxy` service on port 80 (see docs/dokploy.md).
+#   - No watchtower: Dokploy redeploys on git push / webhook.
+#
+# Usage in Dokploy: Project -> Create Service -> Compose, provider "GitHub" or
+# "Git", branch of this fork, Compose Path "./docker-compose.dokploy.yml".
+# Paste .env.dokploy.example (filled in) into the Environment tab.
+
+services:
+  proxy:
+    image: envoyproxy/envoy:v1.30-latest
+    depends_on:
+      - server
+      - webapp
+    expose:
+      - '80'
+    tty: true
+    volumes:
+      - ./docker/envoy/envoy.yaml:/etc/envoy/envoy.yaml:ro
+    restart: unless-stopped
+    networks:
+      - bigcapital_network
+      - dokploy-network
+
+  webapp:
+    build:
+      context: ./
+      dockerfile: packages/webapp/Dockerfile
+    image: bigcapital-fork/webapp:local
+    restart: unless-stopped
+    expose:
+      - '80'
+    networks:
+      - bigcapital_network
+
+  server:
+    build:
+      context: ./
+      dockerfile: packages/server/Dockerfile
+    image: bigcapital-fork/server:local
+    expose:
+      - '3000'
+    depends_on:
+      - mysql
+      - redis
+      - garage
+      - gotenberg
+    restart: unless-stopped
+    networks:
+      - bigcapital_network
+    environment:
+      # Mail
+      - MAIL_HOST=${MAIL_HOST}
+      - MAIL_USERNAME=${MAIL_USERNAME}
+      - MAIL_PASSWORD=${MAIL_PASSWORD}
+      - MAIL_PORT=${MAIL_PORT}
+      - MAIL_SECURE=${MAIL_SECURE}
+      - MAIL_FROM_NAME=${MAIL_FROM_NAME}
+      - MAIL_FROM_ADDRESS=${MAIL_FROM_ADDRESS}
+
+      # Database
+      - DB_HOST=mysql
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_CHARSET=${DB_CHARSET:-utf8}
+
+      # System database
+      - SYSTEM_DB_NAME=${SYSTEM_DB_NAME:-bigcapital_system}
+
+      # Redis
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - QUEUE_HOST=redis
+      - QUEUE_PORT=6379
+
+      # Tenants databases
+      - TENANT_DB_NAME_PERFIX=${TENANT_DB_NAME_PERFIX:-bigcapital_tenant_}
+
+      # ClickHouse analytics store
+      - CLICKHOUSE_ENABLED=${CLICKHOUSE_ENABLED:-false}
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_PORT=8123
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required - generate one with openssl rand -base64 32}
+      - CLICKHOUSE_DATABASE=${CLICKHOUSE_DATABASE:-bigcapital_analytics}
+
+      # Authentication
+      - 'APP_JWT_SECRET=${APP_JWT_SECRET:?APP_JWT_SECRET is required - generate one with openssl rand -base64 48}'
+
+      # Application
+      - BASE_URL=${BASE_URL:?BASE_URL is required, e.g. https://books.example.com}
+
+      # Sign-up restrictions
+      - SIGNUP_DISABLED=${SIGNUP_DISABLED:-false}
+      - SIGNUP_ALLOWED_DOMAINS=${SIGNUP_ALLOWED_DOMAINS}
+      - SIGNUP_ALLOWED_EMAILS=${SIGNUP_ALLOWED_EMAILS}
+      - SIGNUP_EMAIL_CONFIRMATION=${SIGNUP_EMAIL_CONFIRMATION:-false}
+
+      # Gotenberg (PDF generator) - internal service names
+      - GOTENBERG_URL=${GOTENBERG_URL:-http://gotenberg:3000}
+      - GOTENBERG_DOCS_URL=${GOTENBERG_DOCS_URL:-http://server:3000/public/}
+
+      # Exchange Rate
+      - EXCHANGE_RATE_SERVICE=${EXCHANGE_RATE_SERVICE:-open-exchange-rate}
+      - OPEN_EXCHANGE_RATE_APP_ID=${OPEN_EXCHANGE_RATE_APP_ID}
+
+      # Bank Sync / Plaid
+      - BANK_FEED_ENABLED=${BANK_FEED_ENABLED:-false}
+      - PLAID_ENV=${PLAID_ENV:-sandbox}
+      - PLAID_CLIENT_ID=${PLAID_CLIENT_ID}
+      - PLAID_SECRET=${PLAID_SECRET}
+      - PLAID_LINK_WEBHOOK=${PLAID_LINK_WEBHOOK}
+
+      # Lemon Squeezy
+      - LEMONSQUEEZY_API_KEY=${LEMONSQUEEZY_API_KEY}
+      - LEMONSQUEEZY_STORE_ID=${LEMONSQUEEZY_STORE_ID}
+      - LEMONSQUEEZY_WEBHOOK_SECRET=${LEMONSQUEEZY_WEBHOOK_SECRET}
+      - HOSTED_ON_BIGCAPITAL_CLOUD=${HOSTED_ON_BIGCAPITAL_CLOUD:-false}
+
+      # Twilio (SMS)
+      - TWILIO_ACCOUNT_SID=${TWILIO_ACCOUNT_SID}
+      - TWILIO_AUTH_TOKEN=${TWILIO_AUTH_TOKEN}
+      - TWILIO_FROM_NUMBER=${TWILIO_FROM_NUMBER}
+
+      # New Relic
+      - NEW_RELIC_DISTRIBUTED_TRACING_ENABLED=${NEW_RELIC_DISTRIBUTED_TRACING_ENABLED}
+      - NEW_RELIC_LOG=${NEW_RELIC_LOG}
+      - NEW_RELIC_AI_MONITORING_ENABLED=${NEW_RELIC_AI_MONITORING_ENABLED}
+      - NEW_RELIC_CUSTOM_INSIGHTS_EVENTS_MAX_SAMPLES_STORED=${NEW_RELIC_CUSTOM_INSIGHTS_EVENTS_MAX_SAMPLES_STORED}
+      - NEW_RELIC_SPAN_EVENTS_MAX_SAMPLES_STORED=${NEW_RELIC_SPAN_EVENTS_MAX_SAMPLES_STORED}
+      - NEW_RELIC_LICENSE_KEY=${NEW_RELIC_LICENSE_KEY}
+      - NEW_RELIC_APP_NAME=${NEW_RELIC_APP_NAME}
+
+      # S3 (self-hosted Garage by default)
+      - S3_REGION=${S3_REGION:-garage}
+      - S3_ACCESS_KEY_ID=${S3_ACCESS_KEY_ID}
+      - S3_SECRET_ACCESS_KEY=${S3_SECRET_ACCESS_KEY}
+      - S3_ENDPOINT=${S3_ENDPOINT:-http://garage:3900}
+      - S3_BUCKET=${S3_BUCKET:-bigcapital}
+      - S3_FORCE_PATH_STYLE=${S3_FORCE_PATH_STYLE:-true}
+
+      # Stripe
+      - STRIPE_PAYMENT_SECRET_KEY=${STRIPE_PAYMENT_SECRET_KEY}
+      - STRIPE_PAYMENT_PUBLISHABLE_KEY=${STRIPE_PAYMENT_PUBLISHABLE_KEY}
+      - STRIPE_PAYMENT_CLIENT_ID=${STRIPE_PAYMENT_CLIENT_ID}
+      - STRIPE_PAYMENT_WEBHOOKS_SECRET=${STRIPE_PAYMENT_WEBHOOKS_SECRET}
+      - STRIPE_PAYMENT_REDIRECT_URL=${STRIPE_PAYMENT_REDIRECT_URL}
+
+      # PostHog
+      - POSTHOG_API_KEY=${POSTHOG_API_KEY}
+      - POSTHOG_HOST=${POSTHOG_HOST}
+
+      # API rate limiting
+      - THROTTLE_GLOBAL_TTL=${THROTTLE_GLOBAL_TTL:-60000}
+      - THROTTLE_GLOBAL_LIMIT=${THROTTLE_GLOBAL_LIMIT:-300}
+      - THROTTLE_AUTH_TTL=${THROTTLE_AUTH_TTL:-60000}
+      - THROTTLE_AUTH_LIMIT=${THROTTLE_AUTH_LIMIT:-30}
+
+  # Runs system + tenant migrations against the fork's own server image, then
+  # exits. Re-runs on every deploy (idempotent).
+  database_migration:
+    image: bigcapital-fork/server:local
+    pull_policy: never
+    depends_on:
+      - server
+      - mysql
+    restart: 'no'
+    working_dir: /app/packages/server
+    command: >
+      sh -c "until nc -z mysql 3306; do echo 'waiting for mysql'; sleep 2; done;
+             node dist/cli.js system:migrate:latest && node dist/cli.js tenants:migrate:latest"
+    environment:
+      - DB_HOST=mysql
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_CHARSET=${DB_CHARSET:-utf8}
+      - SYSTEM_DB_NAME=${SYSTEM_DB_NAME:-bigcapital_system}
+      - TENANT_DB_NAME_PERFIX=${TENANT_DB_NAME_PERFIX:-bigcapital_tenant_}
+    networks:
+      - bigcapital_network
+
+  mysql:
+    build:
+      context: ./docker/mariadb
+    restart: unless-stopped
+    environment:
+      - MYSQL_DATABASE=${SYSTEM_DB_NAME:-bigcapital_system}
+      - MYSQL_USER=${DB_USER}
+      - MYSQL_PASSWORD=${DB_PASSWORD}
+      - MYSQL_ROOT_PASSWORD=${DB_ROOT_PASSWORD}
+    volumes:
+      - mysql:/var/lib/mysql
+    expose:
+      - '3306'
+    networks:
+      - bigcapital_network
+
+  redis:
+    build:
+      context: ./docker/redis
+    restart: unless-stopped
+    expose:
+      - '6379'
+    volumes:
+      - redis:/data
+    networks:
+      - bigcapital_network
+
+  gotenberg:
+    image: gotenberg/gotenberg:7
+    restart: unless-stopped
+    expose:
+      - '3000'
+    networks:
+      - bigcapital_network
+
+  garage:
+    image: dxflrs/garage:v1.3.1
+    restart: unless-stopped
+    environment:
+      - GARAGE_CONFIG_FILE=/etc/garage.toml
+      - GARAGE_RPC_SECRET=${GARAGE_RPC_SECRET:?GARAGE_RPC_SECRET is required - generate one with openssl rand -hex 32}
+      - GARAGE_ADMIN_TOKEN=${GARAGE_ADMIN_TOKEN:?GARAGE_ADMIN_TOKEN is required - generate one with openssl rand -base64 32}
+      - S3_BUCKET=${S3_BUCKET:-bigcapital}
+    volumes:
+      - ./docker/garage/garage.toml:/etc/garage.toml:ro
+      - ./docker/garage/setup.sh:/garage-setup/setup.sh:ro
+      - garage:/var/lib/garage
+    expose:
+      - '3900'
+      - '3903'
+    networks:
+      - bigcapital_network
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    restart: unless-stopped
+    environment:
+      - CLICKHOUSE_USER=${CLICKHOUSE_USER:-default}
+      - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required - generate one with openssl rand -base64 32}
+      - CLICKHOUSE_DB=${CLICKHOUSE_DATABASE:-bigcapital_analytics}
+    expose:
+      - '8123'
+    volumes:
+      - clickhouse:/var/lib/clickhouse
+    networks:
+      - bigcapital_network
+
+volumes:
+  mysql:
+  redis:
+  garage:
+  clickhouse:
+
+networks:
+  bigcapital_network:
+    driver: bridge
+  # Dokploy's Traefik lives on this network; only `proxy` joins it.
+  dokploy-network:
+    external: true
